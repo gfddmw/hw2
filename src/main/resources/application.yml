@@ -8,29 +8,21 @@ spring:
       read-timeout: 120s
       connect-timeout: 120s
 
-  # Spring AI 标准配置
+  # Spring AI OpenAI 配置，对接学校的 PPIO 代理服务
   ai:
-    dashscope:
-      api-key: sk-50e2c8d125444a91ab226d44fee964c3
-      read-timeout: 120000 # 设置超时时间为 120 秒，防止模型处理超长先验知识时超时
+    openai:
+      api-key: ${PPIO_API_KEY:sk_2TF1piK7-HUpkcITVUC5GyJPxOr3EeKZOupRvjAQqiM} # 课上生成的 API key 填在这里（或通过环境变量 PPIO_API_KEY 传入）
+      base-url: https://api.ppio.com/openai
       chat:
         options:
-          model: qwen-plus
-          temperature: 0.1
+          # 可选模型：
+          # 1. "deepseek/deepseek-v4-pro" (推荐)
+          # 2. "pa/gemini-3.1-pro-preview"
+          # 3. "pa/gpt-5.4"
+          model: pa/gpt-5.4
+          temperature: 1.0
 
-  # Spring Cloud Alibaba AI 兼容配置
-  cloud:
-    ai:
-      dashscope:
-        api-key: sk-50e2c8d125444a91ab226d44fee964c3
-        read-timeout: 120000
-        chat:
-          options:
-            model: qwen-plus
-            temperature: 0.1
-
-# 开启 Spring AI Alibaba 框架的日志，方便带时间戳抓取 Conversation Log
+# 开启 Spring AI 日志
 logging:
   level:
-    com.alibaba.cloud.ai: DEBUG
     org.springframework.ai: DEBUG

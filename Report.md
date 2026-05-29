@@ -1,181 +1,211 @@
 # Software Architecture (2026) Assignment 2 - Architecture Design Report
 **Project Name**: Greenfield Replacement of Hotel Pricing System (HPS)  
 **Selected Option**: Option 3. Multi-agent (Distributed reasoning + collaborative verification)  
-**Selected LLM**: qwen-plus (via Spring AI Alibaba & DashScope API)  
+**Selected LLM**: pa/gpt-5.4 (via Spring AI & PPIO API Proxy)  
 
 ---
 
 ## 一、 Output results of ADD
 
+### ADD Step 1: Review Inputs and Identify Architectural Drivers
+The first step of the Attribute-Driven Design (ADD) method involves reviewing the inputs and identifying the architectural drivers. The inputs consist of functional requirements (use cases), quality attributes, constraints, and architectural concerns.
+
+#### 1. Functional Requirements / Use Cases
+*   **HPS-1: Log In**: User credentials validation against User Identity Service; hotel-scoped authorization check.
+*   **HPS-2: Change Prices**: Change base or fixed rates; simulation support; publish calculated prices to the Channel Management System (CMS).
+*   **HPS-3: Query Prices**: Query prices via UI or query API for users/external systems.
+*   **HPS-4: Manage Hotels**: Admin edits hotel info (tax rates, available rates, room types).
+*   **HPS-5: Manage Rates**: Admin manages rates and defines rate calculation business rules.
+*   **HPS-6: Manage Users**: Admin manages user permissions.
+
+#### 2. Quality Attributes (QAs)
+*   **QA-1 (Performance)**: Rate change publication to query system in < 100 ms. (High Importance / High Difficulty)
+*   **QA-2 (Reliability)**: 100% price changes successfully published to and received by CMS. (High Importance / High Difficulty)
+*   **QA-3 (Availability)**: Pricing queries uptime SLA of 99.9% outside maintenance windows. (High Importance / High Difficulty)
+*   **QA-4 (Scalability)**: Handle 100k to 1M queries/day with < 20% latency increase. (High Importance / High Difficulty)
+*   **QA-5 (Security)**: Validation against Identity Service; present only authorized functions. (High Importance / Medium Difficulty)
+*   **QA-6 (Modifiability)**: Support new query protocol (e.g., gRPC) without changing core components. (Medium Importance / Medium Difficulty)
+*   **QA-7 (Deployability)**: Move between non-production environments with zero code change. (Medium Importance / Medium Difficulty)
+*   **QA-8 (Monitorability)**: Measure performance/reliability of price publication; 100% measures collectable. (Medium Importance / Medium Difficulty)
+*   **QA-9 (Testability)**: Support integration testing independent of external systems. (Medium Importance / Medium Difficulty)
+
+#### 3. Constraints & Architectural Concerns
+*   **CRN-1**: Establish an overall initial system structure.
+*   **CRN-2**: Leverage team knowledge about Java technologies, Angular framework, and Kafka.
+*   **CRN-3**: Allocate work to members of the development team.
+*   **CRN-4**: Avoid introducing technical debt.
+*   **CRN-5**: Set up a continuous deployment infrastructure.
+
+#### 4. Candidate Architectural Drivers
+All of the use cases (HPS-1 to HPS-6), quality attributes (QA-1 to QA-9), and constraints (CRN-1 to CRN-5) form the set of candidate drivers. Among these, the top-level structural choices are heavily driven by performance (QA-1), publish-subscribe reliability (QA-2), high query uptime (QA-3), security access boundaries (QA-5), protocol modifiability (QA-6), testing seams (QA-9), and the mandated technology stack (CRN-2).
+
+---
+
 ### 1) Output results of each step (Iteration 1: Establishing an Overall System Structure)
 
 #### ADD Step 2: Establish the Iteration Goal by Selecting Drivers
-The primary goal of Iteration 1 is to establish the overall initial system structure (CRN-1). The following architectural drivers are selected from the Unified Prior Knowledge Base (UPKB) to guide this iteration, as they fundamentally shape the top-level partitioning and boundary placement:
-*   **D1 (QA-1: Performance)**: A base rate change must publish all derived rates and room types in <100 ms. This requires separating the compute-heavy price change path from the latency-sensitive query serving path.
-*   **D2 (QA-2: Reliability)**: 100% of price changes must be successfully published to the Channel Management System (CMS). This requires a reliable, asynchronous, and idempotent delivery mechanism (leveraging Kafka per CRN-2).
-*   **D3 (QA-3: Availability)**: Pricing queries uptime SLA must be 99.9%. This requires isolating the query service from transient write or downstream failures (e.g., CMS outages).
-*   **D4 (QA-4: Scalability)**: Query capacity must scale from 100k to 1M queries/day with ≤20% latency impact. This justifies a read-optimized, stateless query service.
-*   **D5 (QA-5: Security)**: Enforce hotel-scoped authorization (users only view/change hotels they are authorized for) at the system boundaries.
-
-**Iteration Goal**: *Establish a top-level system structure that separates concerns along write-publish-read-security boundaries, enabling concurrent satisfaction of high-importance QA-1, QA-2, QA-3, QA-4, and QA-5 — using Kafka as a structural backbone (per CRN-2) and respecting greenfield context.*
+The primary goal of Iteration 1 is to establish the overall initial system structure (CRN-1) by identifying the system context, top-level responsibilities, and external system boundaries.
+*   **Primary Drivers**: CRN-1 (Overall Initial Structure), CRN-2 (Java, Angular, Kafka), HPS-1 (Log In), HPS-2 (Change Prices), HPS-3 (Query Prices), QA-1 (Performance), QA-2 (Reliability), QA-3 (Availability), QA-5 (Security).
+*   **Iteration Goal**: *Establish a top-level architecture for HPS that partitions the system along user interface, core processing, query serving, external system integration, and operational support boundaries. Ensure the structure provides hooks for high-priority attributes (QA-1 to QA-5) and incorporates the mandated Angular/Java/Kafka stack.*
 
 #### ADD Step 3: Choose One or More Elements of the System to Refine
-Since this is a greenfield development, we start by selecting the entire **Hotel Pricing System (HPS)** as the single top-level element for refinement by decomposition. The system is decomposed into five core responsibility-bearing elements:
-1.  `User Interface (Angular)`: Renders forms and enforces presentation-layer route guards.
-2.  `API Gateway`: Entry point for clients; terminates TLS, validates JWTs, and routes requests.
-3.  `Application Core (Java)`: Contains write/computation domain logic (base rate computation, rules, hotel management).
-4.  `Publication Service`: Handles reliable asynchronous price pushes to the external CMS.
-5.  `Query Service`: Serves pricing queries from a read-optimized, denormalized data store.
+Since this is greenfield development, the element chosen for refinement is the entire **Hotel Pricing System (HPS)**. The refinement objective is to decompose the system into top-level logical responsibility areas and define the system context with respect to the five identified external actors/systems:
+1.  `Commercial User`
+2.  `Administrator`
+3.  `External Query Client`
+4.  `User Identity Service` (External authentication system)
+5.  `Channel Management System` (External channel booking system)
 
 #### ADD Step 4: Choose One or More Design Concepts That Satisfy the Selected Drivers
-To satisfy the selected drivers without introducing premature complexity (CRN-4), we select three mutually reinforcing design concepts:
-*   **Command Query Responsibility Segregation (CQRS)**: Decouples the write path (D1) from the read path (D3, D4) using separate data stores and processing logic.
-*   **Event-Driven Architecture (EDA)**: Uses Apache Kafka (mandated by CRN-2) as the durable, asynchronous messaging backbone to route price changes reliably (D2) and update query projections.
-*   **API-Led Decomposition (Gateway Pattern)**: Uses an API Gateway to encapsulate cross-cutting security concerns (D5) and isolate the internal network.
+The multi-agent system evaluated several design concepts and selected a combination to satisfy the drivers:
+*   **Front-End / Back-End Separation**: Build a dedicated SPA client (Angular per CRN-2) and a decoupled back-end core (Java per CRN-2) to allow parallel work allocation (CRN-3).
+*   **Command Query Responsibility Segregation (CQRS) & Interface Decoupling**: Separate the price query path (HPS-3) from the price modification/publication path (HPS-2) to isolate write-load failures from query performance (QA-3, QA-4).
+*   **Explicit Integration Boundaries**: Model all external interactions (with CMS and Identity Service) through distinct adapter boundary elements to ensure testability (QA-9) and security context isolation (QA-5).
+*   **Operational Telemetry Sidecar**: Set up a dedicated monitorability layer to track publication reliability and latency (QA-8).
 
 #### ADD Step 5: Instantiate Architectural Elements, Allocate Responsibilities, and Define Interfaces
-*   **`User Interface (Angular)`**:
-    *   *Responsibilities*: Renders UI components; submits commands via HTTP.
-    *   *Interfaces*: Inbound (None), Outbound (HTTP/REST to API Gateway).
-*   **`API Gateway`**:
-    *   *Responsibilities*: Terminates HTTP, validates JWTs, injects authorization headers (`X-Authorized-Hotels`), and routes `/prices/**` requests.
-    *   *Interfaces*: Inbound (HTTP/REST), Outbound (HTTP/REST to Core & Query Services).
-*   **`Application Core (Java)`**:
-    *   *Responsibilities*: Computes rates, validates inputs, persists base rates, and emits `PriceBaseChanged` events.
-    *   *Interfaces*: Inbound (HTTP/REST), Outbound (Kafka Producer to `price-changes`).
-*   **`Publication Service`**:
-    *   *Responsibilities*: Consumes price changes, deduplicates commands, and pushes to CMS via HTTP client.
-    *   *Interfaces*: Inbound (Kafka Consumer), Outbound (HTTP to CMS).
-*   **`Query Service`**:
-    *   *Responsibilities*: Consumes price changes, updates denormalized database projection, and serves client queries.
-    *   *Interfaces*: Inbound (Kafka Consumer, HTTP/REST from Gateway), Outbound (JDBC/Redis).
+*   **`Frontend (Angular)`**: Renders screens for users, accepts inputs, and delegates HTTP requests to internal HPS APIs.
+*   **`Authentication & Authorization Component`**: Resolves permissions, interacts with the external User Identity Service, and checks user authorization scopes.
+*   **`Price Change Processing Component`**: Receives rate changes, executes simulations and rule updates, and publishes events.
+*   **`Price Query Processing Component`**: Exposes query services and serves price lookup requests.
+*   **`Administration Component`**: Handles management tasks for hotels, rates, and user privileges.
+*   **`Query API Interface`**: Exposes query endpoints to external systems (QA-6).
+*   **`Channel Management Integration Component`**: Manages reliability-critical price publication handshakes with the external CMS.
+*   **`Operational Support Component`**: Measures performance and reliable delivery rates for pricing updates.
 
 #### ADD Step 6: Sketch Views and Record Design Decisions
 ```mermaid
-flowchart TD
-    subgraph External
-        A[Commercial User] 
-        B[Administrator]
-        C[Channel Management System]
-        D[External Query Client]
-    end
+flowchart LR
+    CU[Commercial User]
+    AU[Administrator]
+    ES[External System]
+    UIS[User Identity Service]
+    CMS[Channel Management System]
 
-    subgraph HotelPricingSystem[HPS System Boundary]
-        UI[User Interface\nAngular]
-        GW[API Gateway]
-        CORE[Application Core\nJava]
-        PUB[Publication Service]
-        QUERY[Query Service]
-    end
+    FE[Frontend]
+    AUTH[Authentication / Authorization]
+    PC[Price Change Processing]
+    PQ[Price Query Processing]
+    ADM[Administration Processing]
+    QAPI[Query API Interface]
+    INT[Channel Management Integration]
+    OPS[Operational Support]
 
-    A -->|HPS-1/HPS-2/HPS-4/HPS-5| UI
-    B -->|HPS-1/HPS-4/HPS-5/HPS-6| UI
-    D -->|HPS-3 API| GW
-    C <--|HPS-2 push| PUB
+    CU --> FE
+    AU --> FE
+    ES --> QAPI
 
-    UI -->|HTTP/REST| GW
-    GW -->|HTTP/REST\nX-Authorized-Hotels| CORE
-    GW -->|HTTP/REST| QUERY
-    CORE -->|Kafka Producer\n→ price-changes,\nrate-rules| KAFKA[(Kafka Cluster)]
-    PUB -->|Kafka Consumer\n← price-changes| KAFKA
-    PUB -->|HTTP/REST or gRPC| C
-    PUB -->|Kafka Producer\n→ prices-published| KAFKA
-    QUERY -->|Kafka Consumer\n← price-changes,\nprices-published| KAFKA
-    QUERY -->|JDBC/Redis| STORE[(Read-Optimized Store)]
+    FE --> AUTH
+    AUTH --> UIS
+
+    FE --> PC
+    FE --> PQ
+    FE --> ADM
+
+    QAPI --> PQ
+
+    PC --> INT
+    INT --> CMS
+
+    OPS --> PC
+    OPS --> INT
 ```
-*   **DD-1**: System is decomposed into exactly five elements to fulfill drivers while avoiding over-partitioning (CRN-4).
-*   **DD-2**: Kafka and Read Store are modeled as infrastructure resources, not responsibility-bearing elements (ADD 3.0 Step 3).
-*   **DD-3**: API Gateway enforces hotel-scoped RBAC by injecting `X-Authorized-Hotels` based on JWT claims (QA-5).
-*   **DD-4**: Publication Service publishes a separate `PricesPublished` event to Kafka upon successful CMS push to close the loop for monitoring (QA-8).
-*   **DD-5**: Application Core and Query Service communicate exclusively via Kafka to prevent runtime coupling (QA-3).
+*   **DD-0**: Refine HPS system as a whole since it is greenfield development (CRN-1).
+*   **DD-1**: Divide backend services into Pricing Change, Pricing Query, Auth, and Administration to prevent design bloat.
+*   **DD-2**: Establish separate query API interface to satisfy QA-6 (Modifiability).
+*   **DD-3**: Isolate external integration points to ensure independent mock testing (QA-9).
+*   **DD-4**: Setup explicit Operational Support element to track QA-8 (Monitorability).
+*   **DD-5**: Utilize Java/Angular/Kafka as base constraints, but avoid importing external design assumptions yet.
 
 #### ADD Step 7: Perform Analysis of Current Design and Review Iteration Goal
-The proposed decomposition successfully isolates the read path (`Query Service`) from the write path (`Application Core`), ensuring that failures in price computation or administrative tools do not affect query availability (QA-3). Using Kafka as the communication backbone ensures durability (QA-2) and asynchronous offloading (QA-1). No legacy constraints are violated, and no external domain knowledge is introduced. The iteration goal is fully met.
+The initial decomposition partitions HPS into distinct, single-responsibility components. The query and write separation establishes structural boundaries to meet performance (QA-1), reliability (QA-2), availability (QA-3), and scalability (QA-4) targets. Integration boundaries support testability (QA-9) and security (QA-5). ReviewAgent rated this iteration as a **Conditional Pass** because while the structural boundaries are correctly defined, the detailed internal components and coordination mechanisms must be design-finalized in subsequent iterations.
 
 ---
 
 ### 2) Output results of each step (Iteration 2: Identifying Structures to Support Primary Functionality)
 
 #### ADD Step 2: Establish the Iteration Goal by Selecting Drivers
-In Iteration 2, the goal shifts to establishing the structures to support the primary functionality (CRN-1, CRN-2). Drivers include:
-*   **D1 (QA-1: Performance)**: Sub-100 ms rate derivation and publication.
-*   **D2 (QA-2: Reliability)**: Guaranteed price delivery to the CMS.
-*   **D3 (QA-3: Availability)**: 99.9% query SLA.
-*   **D4 (HPS-2: Change Prices)**: The central write transaction of HPS.
-*   **D5 (CRN-2: Technology Constraints)**: Incorporate Angular, Java, and Kafka.
-
-**Iteration Goal**: *Decompose the HPS system into concrete software services, defining their technology bindings (Java, Angular, Kafka), interaction protocols, and responsibility allocations to realize HPS-2 and HPS-3.*
+The goal of Iteration 2 is to decompose the HPS system into concrete services, defining their technology bindings, communication protocols, and interface scopes.
+*   **Primary Drivers**: HPS-1 to HPS-6 (All use cases), QA-5 (Security), QA-6 (Modifiability), QA-9 (Testability), CRN-2 (Java, Angular, Kafka), CRN-3 (Work allocation).
+*   **Iteration Goal**: *Define concrete software services, technology bindings (Java, Angular), communication interfaces, and role mappings to support core use cases, ensuring strict protocol boundaries for query expansion (QA-6) and external integration testing (QA-9).*
 
 #### ADD Step 3: Choose One or More Elements of the System to Refine
-We choose to refine the **HPS system elements** identified in Iteration 1:
-1.  `Price Command Service` (Java Spring Boot)
-2.  `Price Query Service` (Java Spring Boot)
-3.  `Event Backbone` (Apache Kafka)
-4.  `Integration Adapters` (Java packages)
-5.  `Angular Frontend Application`
+We select the **HPS System elements** from Iteration 1 for refinement, focusing on logical components and boundary adapters.
 
 #### ADD Step 4: Choose One or More Design Concepts That Satisfy the Selected Drivers
-*   **Event-Driven Architecture (EDA)**: Formally selected as the primary integration style to satisfy D2 (acks=all), D5 (Kafka), and D1 (async processing).
-*   **CQRS**: Formally splits read and write services to isolate data stores.
-*   **Adapter Pattern**: Isolates external calls (CMS, Identity Service) to maintain core modifiability (QA-6) and support testing (QA-9).
-*   **Stateless Read-Optimized Service**: Backed by a local cache/DB projection to handle high query loads (QA-4) without locking.
+*   **Ports-and-Adapters (Hexagonal)**: Isolate external systems using Adapters. Core logic interacts only with internal interfaces (ports).
+*   **API Gateway Interface Boundary**: Define a unified API Gateway layer ("Access API") to manage routing and authorization checks.
+*   **Read-Write Segmented Components**: Explicitly instantiate separate query and write processors.
+*   **Frontend Routing & View Segregation**: Bind UI views in Angular to route guards driven by user scopes.
 
 #### ADD Step 5: Instantiate Architectural Elements, Allocate Responsibilities, and Define Interfaces
-*   **`Price Command Service`**: Receives commands, executes in-memory rate calculation, persists updates, and emits `PriceUpdatedEvent` to Kafka.
-*   **`Price Query Service`**: Serves query requests via REST from a local Redis/database cache; consumes `PriceUpdatedEvent` to invalidate and refresh the cache.
-*   **`Event Backbone (Kafka)`**: Exposes partitioned topic `price-updates` (key=hotelId) with `acks=all` to ensure zero message loss.
-*   **`Integration Adapters`**: Co-located Java packages (`IdentityAdapter` and `CmsAdapter`) wrapping external client calls.
-*   **`Angular Frontend`**: Connects only to backend REST endpoints; applies Angular Route Guards for UI role rendering.
+*   **`Angular Frontend`**: SPA client. Interacts with backend API via HTTP. Applies client-side route guards.
+*   **`Access API`**: Serves as the gateway. Encapsulates routing and acts as the entry boundary for queries/commands.
+*   **`Authentication & Authorization Component`**: Decouples credential checking, populates authorization context, and performs security rules evaluation.
+*   **`Pricing Application Component`**: Manages HPS-2 base and fixed rate calculations, price change transactions, and publishes pricing events.
+*   **`Price Query Component`**: Handles HPS-3 queries, returning prices to the Access API independent of protocol.
+*   **`Administration Component`**: Executes HPS-4, 5, 6 domain updates.
+*   **`Identity Service Adapter`**: Translates internal authentication calls to external HTTP requests to User Identity Service.
+*   **`Channel Management Adapter`**: Integrates with external CMS via JSON/HTTP payload pushes.
 
 #### ADD Step 6: Sketch Views and Record Design Decisions
 ```mermaid
-flowchart TD
-    subgraph "HPS System Boundary"
-        A[① Price Command Service\n• Java Spring Boot\n• In-memory rate calc\n• Emits PriceUpdatedEvent] -->|HTTP POST /api/v1/...\nJWT auth| F[Axios/Angular HTTP Client]
-        B[② Price Query Service\n• Java Spring Boot\n• Reads from Redis/cache\n• Consumes PriceUpdatedEvent] -->|HTTP GET /api/v1/...\nJWT optional| F
-        C[③ Event Backbone\n• Apache Kafka\n• Topic: price-updates\n• Avro schema, acks=all] 
-        D[④ Integration Adapters\n• IdentityAdapter\n• CmsAdapter] -->|HTTP to Identity Service| E["User Identity Service\n(External)"]
-        D -->|HTTP POST to CMS\nidempotent key| G["Channel Management System\n(External)"]
-        F[⑤ Angular Frontend\n• SPA\n• Role-based rendering] -->|HTTP| A
-        F -->|HTTP| B
-        A -->|Kafka Producer\nPriceUpdatedEvent| C
-        B -->|Kafka Consumer\nPriceUpdatedEvent| C
-        A -->|Adapter Call| D
-        H["External Query Clients\n(e.g., Booking.com, Expedia)"] -->|HTTP GET /api/v1/...| B
+flowchart TB
+    subgraph ExternalSystems[External Systems]
+        UIS[User Identity Service]
+        CMS[Channel Management System]
     end
 
-    style A fill:#4CAF50,stroke:#388E3C,color:white
-    style B fill:#2196F3,stroke:#1565C0,color:white
-    style C fill:#9C27B0,stroke:#6A1B9A,color:white
-    style D fill:#FF9800,stroke:#EF6C00,color:white
-    style F fill:#009688,stroke:#00695C,color:white
-    style E fill:#f5f5f5,stroke:#9E9E9E,color:black,stroke-dasharray: 5 5
-    style G fill:#f5f5f5,stroke:#9E9E9E,color:black,stroke-dasharray: 5 5
-    style H fill:#f5f5f5,stroke:#9E9E9E,color:black,stroke-dasharray: 5 5
+    subgraph HPS[HPS System]
+        AF[Angular Frontend]
+        API[Access API]
+
+        AUTH[Authentication & Authorization Component]
+        PRICING[Pricing Application Component]
+        QUERY[Price Query Component]
+        ADMIN[Administration Component]
+
+        IDADP[Identity Service Adapter]
+        CMSADP[Channel Management Adapter]
+    end
+
+    AF --> API
+
+    API --> AUTH
+    API --> PRICING
+    API --> QUERY
+    API --> ADMIN
+
+    AUTH --> IDADP
+    IDADP --> UIS
+
+    PRICING --> AUTH
+    QUERY --> AUTH
+    ADMIN --> AUTH
+
+    PRICING --> CMSADP
+    CMSADP --> CMS
 ```
-*   **DD-2.1**: Adopt CQRS + EDA as the core architectural style to satisfy performance and reliability.
-*   **DD-2.2**: Kafka is treated as a first-class architectural element to ensure durability and strict ordering.
-*   **DD-2.3**: The Angular frontend has no direct access to Kafka or external services, preserving security boundaries.
-*   **DD-2.4**: `PriceUpdatedEvent` acts as the single source of truth for propagating price changes.
-*   **DD-2.5**: Identity and CMS adapters are co-located within the Java command service to localise protocols.
+*   **DD-2-1**: Separate Angular Frontend SPA from the backend API gateway boundary.
+*   **DD-2-2**: Access API gateway routes requests and intercepts authentication tokens.
+*   **DD-2-3**: Price Query Component is separated from rate change/calculating component (CQRS separation).
+*   **DD-2-4**: Separate Identity and Channel Adapters out of the application core to isolate external network protocols (QA-9).
+*   **DD-2-5**: User context propagation is checked at each internal application entry-point via security decorators.
 
 #### ADD Step 7: Perform Analysis of Current Design and Review Iteration Goal
-The design maps out the exact Java backend services, Angular frontend, and Kafka topics required to implement HPS-2 and HPS-3. The query service's read-only interface to its local projection satisfies the 99.9% uptime requirement (QA-3) by avoiding runtime dependencies on CMS or Write DB. The iteration goal is successfully met.
+The architecture separates the frontend, backend, and external systems into components that communicate via defined APIs. QA-5 is supported by separating authentication checks from pricing workflows. QA-6 is supported because new query endpoints can be added in `Access API` without modifying `Price Query Component`. QA-9 is supported by replacing `Identity Service Adapter` and `Channel Management Adapter` with test doubles. The design satisfies the iteration goal.
 
 ---
 
 ### 3) Output results of each step (Iteration 3: Addressing Reliability and Availability Quality Attributes)
 
 #### ADD Step 2: Establish the Iteration Goal by Selecting Drivers
-Iteration 3 focuses on mitigating failure scenarios to satisfy high-difficulty reliability and availability requirements:
-*   **D-Reliability (QA-2)**: 100% price changes published and received by CMS. Requires end-to-end receipt verification.
-*   **D-Availability-Query (QA-3)**: 99.9% query uptime even during CMS or Identity Service outages.
-*   **D-Decoupling (CRN-2 + CRN-4)**: Leverage Kafka to isolate failure domains.
-
-**Iteration Goal**: *Refine the pricing engine's command-to-publish chain to guarantee end-to-end reliability and query isolation under network partition, database failures, or CMS outages.*
+The focus of Iteration 3 is addressing reliability and availability quality attributes under network partition, database failures, or CMS outages.
+*   **Primary Drivers**: QA-2 (Reliability: 100% CMS delivery), QA-3 (Availability: 99.9% query uptime), CRN-2 (Leverage Kafka), CRN-4 (No technical debt).
+*   **Iteration Goal**: *Refine the pricing engine's command-to-publish chain to guarantee end-to-end reliability (zero message loss) and query availability under CMS outages or database write contention.*
 
 #### ADD Step 3: Choose One or More Elements of the System to Refine
-We choose to refine the **Pricing Engine** (the logical component comprising the write and read services of HPS), focusing on the transaction and messaging boundaries.
+We choose to refine the **Pricing Engine** (specifically the pricing command application, pricing query component, database boundaries, and CMS publishing interfaces).
 
 #### ADD Step 4: Choose One or More Design Concepts That Satisfy the Selected Drivers
 *   **Transactional Outbox Pattern**: Ensures atomic writes: a price change is persisted to the local database and an outbox event is created in the same database transaction. This prevents message loss if Kafka is temporarily down.
@@ -184,70 +214,66 @@ We choose to refine the **Pricing Engine** (the logical component comprising the
 *   **CQRS Read Store Materialized Views**: An independent query DB projection populated via Kafka consumer offsets.
 
 #### ADD Step 5: Instantiate Architectural Elements, Allocate Responsibilities, and Define Interfaces
-*   **`PriceChangeCommandHandler`**: Executes business validations and writes to `PriceRevision` and `Outbox` tables in one transaction.
-*   **`OutboxPublisher`**: Polls the outbox table and publishes to Kafka `price-changes-committed` topic.
-*   **`CMSAdapter`**: Consumes Kafka messages, invokes external CMS API, handles HTTP retries, and emits `CMSReceiptAcknowledged`.
-*   **`ReceiptAcknowledgmentListener`**: Consumes `CMSReceiptAcknowledged`, updates the status in the Write DB, and emits `PriceViewUpdated`.
-*   **`PriceViewProjection`**: Consumes `PriceViewUpdated` and performs an idempotent upsert to the query DB.
-*   **`PriceQueryApi`**: Queries the `price_view` table. It has zero dependencies on other services or Kafka.
+*   **`Price Change API`**: Accepts pricing commands and forwards them to the service layer.
+*   **`Price Change Service`**: Executes rate calculations, writes updates to the authoritative database, and publishes outbox events to Kafka.
+*   **`Published Price Store`**: An independent read database store containing denormalized pricing projections.
+*   **`Kafka Price Publication Topic`**: Partitioned messaging topic (keyed by `hotelId`) used for pricing events.
+*   **`Channel Publication Service`**: Kafka consumer that reads price events, formats CMS messages, handles network retries, and calls the CMS gateway.
+*   **`Channel Management System Boundary`**: Explicit integration endpoint representing the external CMS receiver.
+*   **`Price Query API`**: Gateway routing query lookups to the query service.
+*   **`Price Query Service`**: Serves pricing requests from the `Published Price Store` with zero runtime dependence on write databases or downstream networks.
 
 #### ADD Step 6: Sketch Views and Record Design Decisions
 ```mermaid
 flowchart LR
-    subgraph Write_Context["PricingEngine.Write"]
-        A[PriceChangeCommandHandler] -->|Validated Command| B[OutboxPublisher]
-        B -->|PriceChangeCommitted<br>to Kafka| C[(Kafka Topic:<br>price-changes-committed)]
-        C --> D[CMSAdapter]
-        D -->|HTTP to CMS| E[Channel Management System]
-        D -->|CMSReceiptAcknowledged| C2[(Kafka Topic:<br>cms-receipts)]
-        C2 --> F[ReceiptAcknowledgmentListener]
-        F -->|Update Status +<br>Emit PriceViewUpdated| C3[(Kafka Topic:<br>price-view-updated)]
-        F -->|Transactional DB Update| G[(Authoritative DB<br>PriceRevision)]
+    U1[User / Front-end]
+    U2[External Query Client]
+
+    subgraph HPS[Hotel Pricing System]
+        PCA[Price Change API]
+        PCS[Price Change Service]
+        PPS[(Published Price Store)]
+        KAFKA[[Kafka Price Publication Topic]]
+        CPS[Channel Publication Service]
+
+        PQA[Price Query API]
+        PQS[Price Query Service]
     end
 
-    subgraph Read_Context["PricingEngine.Read"]
-        C3 --> H[PriceViewProjection]
-        H -->|Upsert to| I[(Read-Optimized DB<br>price_view)]
-        J[PriceQueryApi] -->|Direct SELECT| I
-        J -->|HTTP 200| K[Client / External System]
-    end
+    CMS[Channel Management System]
 
-    style A fill:#4CAF50,stroke:#388E3C,color:white
-    style D fill:#2196F3,stroke:#0D47A1,color:white
-    style F fill:#FF9800,stroke:#E65100,color:white
-    style H fill:#9C27B0,stroke:#4A148C,color:white
-    style J fill:#00BCD4,stroke:#006064,color:white
-    style C fill:#607D8B,stroke:#263238,color:white
-    style C2 fill:#607D8B,stroke:#263238,color:white
-    style C3 fill:#607D8B,stroke:#263238,color:white
-    style G fill:#795548,stroke:#3E2723,color:white
-    style I fill:#795548,stroke:#3E2723,color:white
-    style E fill:#F44336,stroke:#B71C1C,color:white
-    style K fill:#E0E0E0,stroke:#616161,color:black
+    U1 --> PCA
+    PCA --> PCS
+    PCS --> PPS
+    PCS --> KAFKA
+    KAFKA --> CPS
+    CPS --> CMS
+
+    U1 --> PQA
+    U2 --> PQA
+    PQA --> PQS
+    PQS --> PPS
 ```
-*   **DD-3.1**: Adopt the Transactional Outbox Pattern to guarantee that committed price changes are never lost, even if Kafka goes down.
-*   **DD-3.2**: split write and read contexts to completely eliminate runtime dependencies between querying and writing.
-*   **DD-3.3**: Use Kafka as the sole asynchronous integration channel between read and write databases.
-*   **DD-3.4**: `PriceQueryApi` operates in a read-only fashion against its isolated database schema.
-*   **DD-3.5**: Idempotent consumers handle message redelivery without causing duplicate updates.
+*   **DD-3-1**: Adopt Transactional Outbox pattern to store price mutations and outbox records in a single database transaction.
+*   **DD-3-2**: Use Kafka as the asynchronous message bus (CRN-2) with `acks=all` and message persistence.
+*   **DD-3-3**: Channel Publication Service handles retries, circuit breaking, and idempotency keys to guarantee CMS receipt (QA-2).
+*   **DD-3-4**: Materialize denormalized views into an independent `Published Price Store` database.
+*   **DD-3-5**: Pricing queries are served from `Published Price Store` with zero runtime dependencies on CMS or write database (QA-3).
 
 #### ADD Step 7: Perform Analysis of Current Design and Review Iteration Goal
-The integration of Outbox + Kafka + CMS acknowledgment guarantees end-to-end reliable publication (QA-2). If the CMS goes down, the `CMSAdapter` retries, keeping events safe in Kafka. Meanwhile, the `PriceQueryApi` remains fully functional because it queries its local `price_view` DB, satisfying the 99.9% uptime SLA (QA-3). The iteration goal is fully met.
+The architecture separates write and read operations. If Kafka or the CMS fails, the outbox table preserves events, and the `Price Change Service` can continue computing rates. Meanwhile, queries to the `Published Price Store` are unaffected, satisfying the 99.9% uptime SLA (QA-3). When the CMS recovers, the `Channel Publication Service` processes the backlog in Kafka, satisfying QA-2.
 
 ---
 
 ### 4) Output results of each step (Iteration 4: Addressing Development and Operations)
 
 #### ADD Step 2: Establish the Iteration Goal by Selecting Drivers
-Iteration 4 focuses on deployability, testability, and monitorability:
-*   **D-ITER4-1 (Deployability - QA-7 + CRN-5)**: Environment-agnostic code, allowing configuration changes without recompilation.
-*   **D-ITER4-2 (Testability - QA-9 + CRN-4)**: Support 100% independent integration testing of components without external systems.
-*   **D-ITER4-3 (Monitorability - QA-8)**: 100% collectable metrics of price publication performance and reliability.
-
-**Iteration Goal**: *Establish cross-cutting mechanisms for configuration binding, runtime dependency injection (test seams), and telemetry emission to support DevOps and QA requirements.*
+The final iteration focuses on deployability, testability, and monitorability.
+*   **Primary Drivers**: QA-7 (Deployability), QA-8 (Monitorability: 100% prices publication metric), QA-9 (Testability: mock external interfaces), CRN-5 (Continuous deployment infrastructure).
+*   **Iteration Goal**: *Establish concrete mechanisms for environment-agnostic configuration loading, interface testing hooks, and price publication telemetry to support DevOps and QA requirements.*
 
 #### ADD Step 3: Choose One or More Elements of the System to Refine
-We select the **Cross-Cutting Infrastructure Layer** (backend utility interfaces and configuration boundaries) for refinement.
+We choose to refine the **cross-cutting infrastructure layer**, specifically the configuration binding interfaces, test profile mappings, and the telemetry emission interfaces on the price publication path.
 
 #### ADD Step 4: Choose One or More Design Concepts That Satisfy the Selected Drivers
 *   **Externalized Configuration Pattern**: Startup configuration binding to isolate code from staging/production credentials (QA-7).
@@ -255,91 +281,85 @@ We select the **Cross-Cutting Infrastructure Layer** (backend utility interfaces
 *   **Domain Event Pattern (Telemetry)**: Emits structured, immutable lifecycle events (e.g., `PricePublicationRequested`, `Succeeded`) to measure end-to-end reliability (QA-8).
 
 #### ADD Step 5: Instantiate Architectural Elements, Allocate Responsibilities, and Define Interfaces
-*   **`ConfigBinder`**:
-    *   *Responsibilities*: Loads and binds properties at startup.
-    *   *Interfaces*: `T bind(Class<T> configType)`.
-*   **`TestSeamRegistry`**:
-    *   *Responsibilities*: Resolves substitutable dependencies (e.g., binds stub implementations in test profiles).
-    *   *Interfaces*: `T get(Class<T> contract)`, `void register(Class<?> contract, Object impl)`.
-*   **`TelemetryEmitter`**:
-    *   *Responsibilities*: Emits structured telemetry events to Kafka.
-    *   *Interfaces*: `void emit(DomainEvent event)`.
+*   **`Angular Frontend`**: Configured via external JSON config injected by the web server at runtime.
+*   **`HPS Application API`**: Resolves REST endpoints and binds credentials at startup.
+*   **`Price Publication Service`**: Centerpiece of the publication path. Coordinates change commands, fires telemetry indicators, and tracks CMS responses.
+*   **`Identity Integration Boundary`**: Explicit interface layer separating Core from the identity client, allows stubbing.
+*   **`Channel Management Integration Boundary`**: Interface wrapping CMS adapter, allows stubbing.
+*   **`Publication Monitoring Support`**: Collects publication metrics and exposes them to the Operations Access point.
+*   **`Configuration Support`**: Provides startup configuration values from environment variables or files (QA-7).
+*   **`Deployment Pipeline Support`**: CI/CD automation that builds environment-agnostic artifacts and deploys them to staging or production (CRN-5).
+*   **`Operations Access`**: Endpoint for administrators to extract telemetry reports.
 
 #### ADD Step 6: Sketch Views and Record Design Decisions
 ```mermaid
-classDiagram
-    class ConfigBinder {
-        <<interface>>
-        +T bind(Class~T~ configType)
-    }
-    note right of ConfigBinder
-      Responsibility: Load and bind
-      environment-specific config at startup.
-      UPKB: QA-7, CRN-5
-    end note
+flowchart LR
+    subgraph ExternalSystems[External Systems]
+        UIS[User Identity Service]
+        CMS[Channel Management System]
+    end
 
-    class TestSeamRegistry {
-        <<interface>>
-        +T get(Class~T~ contract)
-        +void register(Class~?~ contract, Object impl)
-    }
-    note right of TestSeamRegistry
-      Responsibility: Resolve substitutable
-      implementations for integration testing.
-      UPKB: QA-9, CRN-4
-    end note
+    subgraph HPS[Hotel Pricing System]
+        AF[Angular Frontend]
+        API[HPS Application API]
+        PPS[Price Publication Service]
 
-    class TelemetryEmitter {
-        <<interface>>
-        +void emit(DomainEvent event)
-    }
-    note right of TelemetryEmitter
-      Responsibility: Emit lossless,
-      structured domain events for price
-      publication lifecycle.
-      UPKB: QA-8, CRN-2 (Kafka transport)
-    end note
+        IIB[Identity Integration Boundary]
+        CMB[Channel Management Integration Boundary]
 
-    class PriceService {
-        +void changePrices(...)
-    }
-    note left of PriceService
-      Functional service (HPS-2).
-      Collaborates with all three
-      cross-cutting elements.
-    end note
+        PMS[Publication Monitoring Support]
+        CS[Configuration Support]
+        DPS[Deployment Pipeline Support]
+        OA[Operations Access]
+    end
 
-    PriceService --> ConfigBinder : uses
-    PriceService --> TestSeamRegistry : uses
-    PriceService --> TelemetryEmitter : uses
+    AF --> API
+    API --> PPS
+    API --> IIB
+    IIB --> UIS
 
-    ConfigBinder x--x TestSeamRegistry : «no dependency»
-    ConfigBinder x--x TelemetryEmitter : «no dependency»
-    TestSeamRegistry x--x TelemetryEmitter : «no dependency»
+    PPS --> CMB
+    CMB --> CMS
 
-    note over ConfigBinder,TestSeamRegistry,TelemetryEmitter
-      All elements instantiated at composition root.
-      Enforces CRN-3 (team allocation) and CRN-4 (no tech debt).
-    end note
+    PPS --> PMS
+    OA --> PMS
+
+    CS -. config .-> AF
+    CS -. config .-> API
+    CS -. config .-> PPS
+    CS -. config .-> IIB
+    CS -. config .-> CMB
+
+    DPS -. deploys .-> AF
+    DPS -. deploys .-> API
+    DPS -. deploys .-> PPS
+    DPS -. supports .-> CS
+    DPS -. supports .-> PMS
 ```
-*   **DD-4.1**: `ConfigBinder` abstracts environment details, satisfying QA-7 and CRN-5.
-*   **DD-4.2**: `TestSeamRegistry` uses interface-based dependency injection to inject test doubles, satisfying QA-9.
-*   **DD-4.3**: `TelemetryEmitter` uses structured domain events instead of lossy log files, satisfying QA-8.
+*   **DD-4-1**: Use an explicit boundary structure for development/ops instead of hardcoding environment values.
+*   **DD-4-2**: User Identity and CMS endpoints are wrapped in interfaces (`IIB` and `CMB`), allowing stubbing for tests (QA-9).
+*   **DD-4-3**: Define `Configuration Support` to load configurations from environment variables at startup (QA-7).
+*   **DD-4-4**: Establish `Deployment Pipeline Support` to compile environment-agnostic artifacts (CRN-5).
+*   **DD-4-5**: `Publication Monitoring Support` collects price publication metrics (QA-8).
+*   **DD-4-6**: Set `Price Publication Service` as the single path for pricing publications to ensure all updates are monitored.
+*   **DD-4-7**: Operations Access provides telemetry data to operators.
+*   **DD-4-8**: Do not use Kafka for local integration testing to keep test environments lightweight (QA-9).
+*   **DD-4-9**: Telemetry events are emitted synchronously on request start and asynchronously on acknowledgment to measure publication latency (QA-8).
 
 #### ADD Step 7: Perform Analysis of Current Design and Review Iteration Goal
-The design decouples environment parameters, implements testing seams, and integrates a telemetry pipeline using Java interfaces. It satisfies QA-7, QA-8, QA-9, and CRN-5 without modifying core domain logic. The iteration goal is fully met.
+The configuration and deployment boundaries allow the system to be moved between environments without code changes, satisfying QA-7 and CRN-5. The integration boundaries (`IIB` and `CMB`) decouple external services, satisfying QA-9 by allowing stubbing. Emitting telemetry events on the publication path satisfies QA-8. The iteration goal is met.
 
 ---
 
 ## 二、 Interaction cost analysis
 
-The following table records the execution metrics of the multi-agent system used to generate this architectural design:
+The multi-agent system completed the 4-iteration ADD design process in a single automated run. The execution metrics are summarized below:
 
 | The way of completing the assignment | The LLM used | Number of Human Interactions (turns) | Token Consumption (K tokens) | Time Cost (min) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Option 3. Multi-agent** (Distributed reasoning & collaborative verification) | **qwen-plus** (via Spring AI Alibaba) | **1** (Single execution trigger for all 4 iterations) | **~150 K tokens** (Total input/output across all agents) | **15 minutes** (00:10:39 to 00:25:19) |
+| **Option 3. Multi-agent** (Distributed reasoning & collaborative verification) | **pa/gpt-5.4** (via Spring AI & PPIO API Proxy) | **1** (Single execution trigger for all 4 iterations) | **~250 K tokens** (Total input/output across agents) | **11.3 minutes** (14:27:17 to 14:38:37) |
 
-*Rationale for Turn Efficiency*: Because the system was built as a Spring-managed automated orchestrator (`MultiAgentArchitectureService` + JUnit `AgentRunner`), the human user only had to interact **once** to run the program. The entire 4-iteration ADD design workflow was completed asynchronously and collaboratively by the three agents (Analysis, Design, Review) in a single run.
+*Rationale for Turn Efficiency*: The multi-agent system was executed via a Spring Boot test harness (`AgentRunner.java` invoking `MultiAgentArchitectureService`). Because the interactions between the agents (AnalysisAgent, DesignAgent, and ReviewAgent) were managed programmatically, the human user only had to initiate the process once. The agents generated, verified, and audited the design for all four iterations in a single run.
 
 ---
 
@@ -347,20 +367,20 @@ The following table records the execution metrics of the multi-agent system used
 
 ### 1) The problems encountered and the solutions adopted
 
-*   **Maven BOM Version Resolution Defect**:
-    *   *Problem*: The Maven build initially failed because the dependency version for `spring-ai-alibaba-starter-dashscope` could not be resolved from the parent BOM.
-    *   *Solution*: Declared the starter version explicitly in the `pom.xml` dependency block using `<version>${spring-ai-alibaba.version}</version>` instead of relying on the BOM's dependency management section.
-*   **Spring AI Key Bindings Prefix Mismatch**:
-    *   *Problem*: Spring AI DashScope was looking for the API key under the prefix `spring.ai.dashscope.api-key`, while some starter documentation used `spring.cloud.ai.dashscope.api-key`, causing authentication errors on startup.
-    *   *Solution*: Configured both prefixes in the `application.yml` file to duplicate the key bindings, ensuring that both Spring AI and Alibaba Cloud starter components validated successfully.
-*   **REST Client Read Timeout on Large Prompts**:
-    *   *Problem*: Because the prior knowledge base and agent prompts are very large (aggregating around 12 KB per request), Qwen took more than 10 seconds to generate the full ADD steps, causing `SocketTimeoutException` under default RestClient configurations.
-    *   *Solution*: Introduced `TimeoutConfig.java` to inject a `RestClientCustomizer` bean, customizing the underlying HTTP client to increase connection and read timeouts to 120 seconds.
+*   **PPIO Model Beta Parameter Constraint**:
+    *   *Problem*: The Spring AI OpenAI starter defaulted to transmitting custom model parameters (like low temperature value `0.1` and default `top_p` parameters). However, the PPIO API proxy for the model `pa/gpt-5.4` enforces beta limitations stating: `this model has beta-limitations, temperature, top_p and n are fixed at 1, while presence_penalty and frequency_penalty are fixed at 0`. This caused an immediate HTTP 400 Bad Request error on startup.
+    *   *Solution*: Configured `spring.ai.openai.chat.options.temperature: 1.0` in [application.yml](file:///E:/A-NJU/课程/软件系统设计/hw2/src/main/resources/application.yml) and verified that other parameters were not populated or left to their beta defaults, bypassing the HTTP 400 error.
+*   **Spring Milestone Dependency Mismatches**:
+    *   *Problem*: Spring AI Alibaba version `1.1.2.2` depends on the milestone Spring AI `1.1.2` release. The Maven build could not download the correct artifact `spring-ai-starter-model-openai` (originally named `spring-ai-openai-spring-boot-starter` in older pre-releases) from Aliyun's central repository, causing compilation errors.
+    *   *Solution*: Added the Aliyun Spring Milestone mirror (`https://maven.aliyun.com/repository/spring`) in [pom.xml](file:///E:/A-NJU/课程/软件系统设计/hw2/pom.xml), allowing the build system to download the required Spring AI milestone packages.
+*   **Git Remote History Conflicts**:
+    *   *Problem*: Attempting to push changes to the remote repository `https://github.com/gfddmw/hw2.git` failed with a `fatal: refusing to merge unrelated histories` error because the local repository was initialized separately from the remote.
+    *   *Solution*: Force-pushed the repository using `git push -f origin main` since the remote was a newly initialized repository.
 
 ### 2) A detailed account of your personal contributions to the group work
 
 | Name (Chinese) | Contributions |
 | :--- | :--- |
-| **[张三 / Student A]** | Group Leader. Handled the Feishu selection registration, contacted the TA to activate the DashScope API key, and managed the final Moodle submission. |
-| **[李四 / Student B]** | Backend Developer. Wrote the Spring Boot application scaffolding, set up the `pom.xml` dependencies, and configured the multi-agent orchestrator service. |
-| **[王五 / Student C]** | QA & DevOps. Configured the timeout client configurations, resolved the dynamic agent warnings, ran the `AgentRunner` test suite to output the log, and compiled the final English report. |
+| **张三 (Student A)** | Group Leader. Selected the multi-agent option on Moodle, registered the team, coordinated tasks, and handled git repository initialization and Moodle deliverables integration. |
+| **李四 (Student B)** | Backend Developer. Created the Spring Boot project structure, set up Maven configuration files, implemented the multi-agent orchestrator service using Spring AI, and configured client options in `application.yml`. |
+| **王五 (Student C)** | QA & DevOps Engineer. Debugged PPIO API proxy parameters, configured client connection timeouts, ran the automated `AgentRunner` test suite, verified logs, and compiled the architectural report. |
