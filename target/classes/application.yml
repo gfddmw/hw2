@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: hotel-pricing-ai-architect
+
+  # Spring Boot 3.x 全局 HTTP 客户端超时配置 (会应用到 RestClient)
+  http:
+    client:
+      read-timeout: 120s
+      connect-timeout: 120s
+
+  # Spring AI 标准配置
+  ai:
+    dashscope:
+      api-key: sk-50e2c8d125444a91ab226d44fee964c3
+      read-timeout: 120000 # 设置超时时间为 120 秒，防止模型处理超长先验知识时超时
+      chat:
+        options:
+          model: qwen-plus
+          temperature: 0.1
+
+  # Spring Cloud Alibaba AI 兼容配置
+  cloud:
+    ai:
+      dashscope:
+        api-key: sk-50e2c8d125444a91ab226d44fee964c3
+        read-timeout: 120000
+        chat:
+          options:
+            model: qwen-plus
+            temperature: 0.1
+
+# 开启 Spring AI Alibaba 框架的日志，方便带时间戳抓取 Conversation Log
+logging:
+  level:
+    com.alibaba.cloud.ai: DEBUG
+    org.springframework.ai: DEBUG
